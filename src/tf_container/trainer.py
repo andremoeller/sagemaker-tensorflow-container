@@ -169,7 +169,7 @@ class Trainer(object):
         :return: task_type and tf_config dictionary
         """
         num_parameter_servers = int(self.customer_params.get('num_parameter_servers', len(self.hosts)))
-        num_workers = int(self.customer_params.get('num_workers', len(self.hosts)))
+        num_workers = int(self.customer_params.get('num_workers', len(self.hosts) - 1))
 
         masters = self.hosts[:1]
         ps = self.hosts[:num_parameter_servers] if len(self.hosts) > 1 else []
