@@ -371,6 +371,8 @@ def test_build_tf_config_with_one_host(trainer):
 def test_build_tf_config_with_multiple_hosts(trainer):
     trainer.hosts = ['algo-1', 'algo-2', 'algo-3', 'algo-4']
     trainer.current_host = 'algo-3'
+    trainer.customer_params['num_parameter_servers'] = 4
+    trainer.customer_params['num_workers'] = 3
 
     tf_config = trainer.build_tf_config()
 
@@ -386,6 +388,31 @@ def test_build_tf_config_with_multiple_hosts(trainer):
 
     assert tf_config == expected_tf_config
     assert trainer.task_type == 'worker'
+
+
+def test_build_tf_config_with_many_hosts(trainer):
+    #trainer.hosts = ['algo-1', 'algo-2', 'algo-3', 'algo-4']
+    trainer.hosts = ['algo-' + str(x) for x in range(1, 83)]
+    trainer.current_host = 'algo-1'
+    trainer.customer_params['num_parameter_servers'] = 31
+    trainer.customer_params['num_workers'] = 50
+
+    tf_config = trainer.build_tf_config()
+
+    expected_tf_config = {
+        'environment': 'cloud',
+        'cluster': {
+            'master': ['algo-1:2222'],
+            'ps': ['algo-1:2223', 'algo-2:2223', 'algo-3:2223', 'algo-4:2223'],
+            'worker': ['algo-2:2222', 'algo-3:2222', 'algo-4:2222']
+        },
+        'task': {'index': 1, 'type': 'worker'}
+    }
+
+    print(tf_config)
+
+    # assert tf_config == expected_tf_config
+    assert trainer.task_type == 'master'
 
 
 @patch('boto3.client')
