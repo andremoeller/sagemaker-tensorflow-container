@@ -168,6 +168,7 @@ class Trainer(object):
         /python/learn/estimators/run_config.py#L77
         :return: task_type and tf_config dictionary
         """
+        workers_per_node = self.customer_params.get('workers_per_node', 3)
 
         masters = self.hosts[:1]
         workers = self.hosts[1:]
@@ -182,12 +183,19 @@ class Trainer(object):
 
         task_id = task_map[self.task_type].index(self.current_host)
 
-        def build_host_addresses(my_hosts, port='2222'):
-            return ['{}:{}'.format(host, port) for host in my_hosts]
+        def build_host_addresses(my_hosts, task_type, port='2222'):
+            if task_type != 'worker':
+                return ['{}:{}'.format(host, port) for host in my_hosts]
+            else:
+                l = []
+                for i, host in enumerate(my_hosts):
+                    l.append('{}:{}').format(host, port + 1)
+                print("Worker config: " + str(l))
+                return l
 
         tf_config = {
             'cluster': {
-                'master': build_host_addresses(masters),
+                'master': build_host_addresses(masters, 'master'),
             },
             'task': {
                 'index': task_id,
@@ -197,11 +205,13 @@ class Trainer(object):
         }
 
         if ps:
-            tf_config['cluster']['ps'] = build_host_addresses(ps, port='2223')
+            tf_config['cluster']['ps'] = build_host_addresses(ps, 'ps', port='2223')
 
         if len(workers) > 0:
-            tf_config['cluster']['worker'] = build_host_addresses(workers)
+            tf_config['cluster']['worker'] = build_host_addresses(workers, 'worker', port='2224')
 
+        logger.info("TF Config")
+        logger.info(tf_config)
         return tf_config
 
     def _get_task_type(self, masters):

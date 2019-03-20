@@ -72,6 +72,16 @@ def _run_ps_server(current_host, hosts, tf_config):
     p.start()
 
 
+def _run_worker(current_host, hosts, tf_config):
+    def start_worker(current_host, hosts, tf_config):
+        cluster_spec = tf.train.ClusterSpec(tf_config['cluster'])
+        task_index = hosts.index(current_host)
+        server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
+        server.join()
+
+    p = Process(target=start_worker, args=(current_host, hosts, tf_config))
+    p.start()
+
 def _get_default_training_params(env):
     my_parser = argparse.ArgumentParser()
     my_parser.add_argument('--training_steps', type=int, default=1000)
