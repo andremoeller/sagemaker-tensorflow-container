@@ -45,16 +45,17 @@ class MyEstimator(TensorFlow):
         return model
 
 
-def test_distributed(instance_type, sagemaker_session, docker_image_uri):
-    script_path = 'test/resources/cifar_10/code'
-    data_path = 'test/resources/cifar_10/data/training'
+def test_distributed_two_workers(instance_type, sagemaker_session, docker_image_uri):
+    script_path = 'test/resources/mnist/code'
+    data_path = 'test/resources/mnist/data/training'
     with timeout(minutes=30):
-        estimator = MyEstimator(entry_point='resnet_cifar_10.py',
+        estimator = MyEstimator(entry_point='mnist.py',
                                 source_dir=script_path,
                                 role='SageMakerRole',
-                                training_steps=500,
-                                evaluation_steps=1,
-                                train_instance_count=2,
+                                training_steps=1000,
+                                evaluation_steps=100,
+                                hyperparameters={'workers_per_host': 2},
+                                train_instance_count=4,
                                 train_instance_type=instance_type,
                                 sagemaker_session=sagemaker_session,
                                 docker_image_uri=docker_image_uri)
@@ -67,14 +68,52 @@ def test_distributed(instance_type, sagemaker_session, docker_image_uri):
         logger.info("fitting estimator")
         estimator.fit(inputs)
 
-    with timeout_and_delete_endpoint(estimator=estimator, minutes=30):
-        logger.info("deploy model")
-        json_predictor = estimator.deploy(initial_instance_count=1, instance_type=instance_type)
 
-        data = np.random.rand(32, 32, 3)
-        predict_response = json_predictor.predict(data)
+def test_distributed_three_workers(instance_type, sagemaker_session, docker_image_uri):
+    script_path = 'test/resources/mnist/code'
+    data_path = 'test/resources/mnist/data/training'
+    with timeout(minutes=30):
+        estimator = MyEstimator(entry_point='mnist.py',
+                                source_dir=script_path,
+                                role='SageMakerRole',
+                                training_steps=1000,
+                                evaluation_steps=100,
+                                hyperparameters={'workers_per_host': 3},
+                                train_instance_count=4,
+                                train_instance_type=instance_type,
+                                sagemaker_session=sagemaker_session,
+                                docker_image_uri=docker_image_uri)
 
-        assert predict_response['outputs']['probabilities']
+        logger.info("uploading training data")
+        key_prefix = 'integ-test-data/tf-cifar-{}'.format(instance_type)
+        inputs = estimator.sagemaker_session.upload_data(path=data_path,
+                                                         key_prefix=key_prefix)
+
+        logger.info("fitting estimator")
+        estimator.fit(inputs)
+
+
+def test_distributed_process_default(instance_type, sagemaker_session, docker_image_uri):
+    script_path = 'test/resources/mnist/code'
+    data_path = 'test/resources/mnist/data/training'
+    with timeout(minutes=30):
+        estimator = MyEstimator(entry_point='mnist.py',
+                                source_dir=script_path,
+                                role='SageMakerRole',
+                                training_steps=1000,
+                                evaluation_steps=100,
+                                train_instance_count=4,
+                                train_instance_type=instance_type,
+                                sagemaker_session=sagemaker_session,
+                                docker_image_uri=docker_image_uri)
+
+        logger.info("uploading training data")
+        key_prefix = 'integ-test-data/tf-cifar-{}'.format(instance_type)
+        inputs = estimator.sagemaker_session.upload_data(path=data_path,
+                                                         key_prefix=key_prefix)
+
+        logger.info("fitting estimator")
+        estimator.fit(inputs)
 
 
 def test_pipe_mode(instance_type, sagemaker_session, docker_image_uri):

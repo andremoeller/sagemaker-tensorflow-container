@@ -64,11 +64,11 @@ class Trainer(object):
         if model_path.startswith('s3://'):
             s3_fs.configure_s3_fs(model_path)
 
-    def train(self):
+    def train(self, session_hooks=None):
         run_config = self._build_run_config()
         estimator = self._build_estimator(run_config=run_config)
-        train_spec = self._build_train_spec()
-        eval_spec = self._build_eval_spec()
+        train_spec = self._build_train_spec(session_hooks=session_hooks)
+        eval_spec = self._build_eval_spec(session_hooks=session_hooks)
 
         tf.estimator.train_and_evaluate(estimator=estimator, train_spec=train_spec, eval_spec=eval_spec)
 
@@ -112,16 +112,16 @@ class Trainer(object):
                 params=hyperparameters,
                 config=run_config)
 
-    def _build_train_spec(self):
+    def _build_train_spec(self, session_hooks=None):
         invoke_args = self._resolve_input_fn_args(self.customer_script.train_input_fn)
         train_input_fn = lambda: self.customer_script.train_input_fn(**invoke_args)
 
-        return tf.estimator.TrainSpec(train_input_fn, max_steps=self.train_steps)
+        return tf.estimator.TrainSpec(train_input_fn, max_steps=self.train_steps, hooks=session_hooks)
 
     def saves_training(self):
         return hasattr(self.customer_script, 'serving_input_fn')
 
-    def _build_eval_spec(self):
+    def _build_eval_spec(self, session_hooks=None):
         invoke_args = self._resolve_input_fn_args(self.customer_script.eval_input_fn)
         eval_input_fn = lambda: self.customer_script.eval_input_fn(**invoke_args)
 
@@ -136,7 +136,8 @@ class Trainer(object):
         valid_eval_keys = ['start_delay_secs', 'throttle_secs']
         eval_params = {k: v for k, v in self.customer_params.items() if k in valid_eval_keys}
 
-        return tf.estimator.EvalSpec(eval_input_fn, steps=self.eval_steps, exporters=exporter, **eval_params)
+        return tf.estimator.EvalSpec(eval_input_fn, steps=self.eval_steps, exporters=exporter, hooks=session_hooks,
+                                     **eval_params)
 
     def _resolve_input_fn_args(self, customer_fn):
         declared_args = inspect.getargspec(customer_fn)
@@ -168,7 +169,7 @@ class Trainer(object):
         /python/learn/estimators/run_config.py#L77
         :return: task_type and tf_config dictionary
         """
-        workers_per_host = self.customer_params.get('workers_per_host', 3)
+        workers_per_host = self.customer_params.get('workers_per_host', 1)
 
         masters = self.hosts[:1]
         workers = self.hosts[1:]
@@ -190,7 +191,7 @@ class Trainer(object):
                 worker_host_addresses = []
                 for i in range(workers_per_host):
                     for host in my_hosts:
-                        worker_host_addresses.append('{}:{}'.format(host, str(int(port) + i + 1)))
+                        worker_host_addresses.append('{}:{}'.format(host, str(int(port) + i)))
                 return worker_host_addresses
 
         tf_config = {
@@ -218,3 +219,5 @@ class Trainer(object):
         if self.current_host in masters:
             return 'master'
         return 'worker'
+
+

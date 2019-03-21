@@ -23,6 +23,8 @@ import tensorflow as tf
 import container_support as cs
 import tf_container.run
 import tf_container.serve as serve
+
+from tf_container.trainer import Trainer
 from multiprocessing import Process
 
 _logger = tf_container.run.get_logger()
@@ -69,18 +71,20 @@ def _run_ps_server(current_host, hosts, tf_config):
         server.join()
 
     p = Process(target=start_ps_server, args=(current_host, hosts, tf_config))
+    _logger.info('Starting parameter server process')
     p.start()
 
 
 def _run_workers(current_host, hosts, tf_config, hyperparameters):
 
-    workers_per_host = hyperparameters.get('workers_per_host', 3)
+    workers_per_host = hyperparameters.get('workers_per_host', 1)
 
     def start_worker(current_host, hosts, tf_config, worker_index):
         cluster_spec = tf.train.ClusterSpec(tf_config['cluster'])
 
-        # This assumes we're running n - 1 worker tasks.
+        # This assumes we're running n - 1 worker tasks, and that worker_index >= 1.
         task_index = hosts.index(current_host) + (len(hosts) - 1) * worker_index
+        _logger.info('starting process with worker index {} and task index {}'.format(worker_index, task_index))
         server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
         server.join()
 
@@ -89,6 +93,7 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters):
             # This worker was already started by TF session
             continue
         p = Process(target=start_worker, args=(current_host, hosts, tf_config, worker_index))
+        _logger.info('Starting worker process with worker index ' + str(worker_index))
         p.start()
 
 
@@ -103,25 +108,6 @@ def _get_default_training_params(env):
 
 def _get_master(tf_config):
     return tf_config['cluster']['master'][0][:-5]
-
-
-def _get_trainer_class():
-    # We used the Experiment API in tf.contrib.learn initially. It's not
-    # officially supported, and it's not working properly with TF 1.6, so
-    # we've switched to using tf.estimator.train_and_evaluate instead for
-    # versions 1.6 and up. However, we still want to use the old API for
-    # 1.4 and 1.5, since the new API isn't fully backwards compatible.
-
-    major, minor, patch = tf.__version__.split('.')
-    if major != '1':
-        raise ValueError('We only support TensorFlow 1.x.y currently.')
-
-    if minor in ['4', '5']:
-        import tf_container.experiment_trainer
-        return tf_container.experiment_trainer.Trainer
-
-    import tf_container.trainer
-    return tf_container.trainer.Trainer
 
 
 def _get_checkpoint_dir(env):
@@ -170,18 +156,18 @@ def train():
 
     customer_script = env.import_user_module()
 
-    trainer_class = _get_trainer_class()
-    train_wrapper = trainer_class(customer_script=customer_script,
-                                  current_host=env.current_host,
-                                  hosts=env.hosts,
-                                  train_steps=train_steps,
-                                  eval_steps=eval_steps,
-                                  input_channels=env.channel_dirs,
-                                  model_path=checkpoint_dir,
-                                  output_path=env.output_dir,
-                                  customer_params=env.hyperparameters)
 
-    tf_config = train_wrapper.build_tf_config()
+    trainer = Trainer(customer_script=customer_script,
+                            current_host=env.current_host,
+                            hosts=env.hosts,
+                            train_steps=train_steps,
+                            eval_steps=eval_steps,
+                            input_channels=env.channel_dirs,
+                            model_path=checkpoint_dir,
+                            output_path=env.output_dir,
+                            customer_params=env.hyperparameters)
+
+    tf_config = trainer.build_tf_config()
 
     # only creating a parameter servers for distributed runs
     if len(env.hosts) > 1:
@@ -192,11 +178,34 @@ def train():
 
     configure_mkl()
 
-    train_wrapper.train()
+    #initialize_hook = InitializeHook(env, tf_config)
+    #trainer.train([initialize_hook])
 
+    trainer.train()
+
+
+    # MAYBE the master never exits, so nothing else exits?
     # only the master should export the model at the end of the execution
-    if checkpoint_dir != env.model_dir and train_wrapper.task_type == 'master' and train_wrapper.saves_training():
+    if checkpoint_dir != env.model_dir and trainer.task_type == 'master' and trainer.saves_training():
         serve.export_saved_model(checkpoint_dir, env.model_dir)
 
-    if train_wrapper.task_type != 'master':
+    if trainer.task_type != 'master':
         _wait_until_master_is_down(_get_master(tf_config))
+
+
+class InitializeHook(tf.train.SessionRunHook):
+    def __init__(self, env, tf_config):
+        self.env = env
+        self.tf_config = tf_config
+
+    def begin(self):
+        _logger.info('Running initialize hook.')
+        if len(self.env.hosts) > 1:
+            _logger.info('Running parameter servers.')
+            _run_ps_server(self.env.current_host, self.env.hosts, self.tf_config)
+            _logger.info('Possibly running additional workers.')
+            _run_workers(self.env.current_host, self.env.hosts, self.tf_config, self.env.hyperparameters)
+            import time
+            time.sleep(5)
+            import os
+            os.system('ps aux')
