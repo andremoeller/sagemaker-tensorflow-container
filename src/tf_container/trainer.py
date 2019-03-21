@@ -168,7 +168,7 @@ class Trainer(object):
         /python/learn/estimators/run_config.py#L77
         :return: task_type and tf_config dictionary
         """
-        workers_per_node = self.customer_params.get('workers_per_node', 3)
+        workers_per_host = self.customer_params.get('workers_per_host', 3)
 
         masters = self.hosts[:1]
         workers = self.hosts[1:]
@@ -187,11 +187,11 @@ class Trainer(object):
             if task_type != 'worker':
                 return ['{}:{}'.format(host, port) for host in my_hosts]
             else:
-                l = []
-                for i, host in enumerate(my_hosts):
-                    l.append('{}:{}').format(host, port + 1)
-                print("Worker config: " + str(l))
-                return l
+                worker_host_addresses = []
+                for i in range(workers_per_host):
+                    for host in my_hosts:
+                        worker_host_addresses.append('{}:{}'.format(host, port + str(i + 1)))
+                return worker_host_addresses
 
         tf_config = {
             'cluster': {
