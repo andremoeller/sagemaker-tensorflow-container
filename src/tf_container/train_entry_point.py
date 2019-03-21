@@ -72,15 +72,25 @@ def _run_ps_server(current_host, hosts, tf_config):
     p.start()
 
 
-def _run_worker(current_host, hosts, tf_config):
-    def start_worker(current_host, hosts, tf_config):
+def _run_workers(current_host, hosts, tf_config, hyperparameters):
+
+    workers_per_host = hyperparameters.get('workers_per_host', 3)
+
+    def start_worker(current_host, hosts, tf_config, worker_index):
         cluster_spec = tf.train.ClusterSpec(tf_config['cluster'])
-        task_index = hosts.index(current_host)
+
+        # This assumes we're running n - 1 worker tasks.
+        task_index = hosts.index(current_host) + (len(hosts) - 1) * worker_index
         server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
         server.join()
 
-    p = Process(target=start_worker, args=(current_host, hosts, tf_config))
-    p.start()
+    for worker_index in range(workers_per_host):
+        if worker_index == 0:
+            # This worker was already started by TF session
+            continue
+        p = Process(target=start_worker, args=(current_host, hosts, tf_config, worker_index))
+        p.start()
+
 
 def _get_default_training_params(env):
     my_parser = argparse.ArgumentParser()
@@ -176,6 +186,7 @@ def train():
     # only creating a parameter servers for distributed runs
     if len(env.hosts) > 1:
         _run_ps_server(env.current_host, env.hosts, tf_config)
+        _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters)
 
     save_tf_config_env_var(tf_config)
 

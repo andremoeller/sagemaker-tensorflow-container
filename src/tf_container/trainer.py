@@ -190,7 +190,7 @@ class Trainer(object):
                 worker_host_addresses = []
                 for i in range(workers_per_host):
                     for host in my_hosts:
-                        worker_host_addresses.append('{}:{}'.format(host, port + str(i + 1)))
+                        worker_host_addresses.append('{}:{}'.format(host, str(int(port) + i + 1)))
                 return worker_host_addresses
 
         tf_config = {
