@@ -88,7 +88,7 @@ def _run_ps_server(current_host, hosts, tf_config):
     p.start()
 
 
-def _run_workers(current_host, hosts, tf_config, hyperparameters):
+def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
 
     workers_per_host = hyperparameters.get('workers_per_host', 1)
 
@@ -96,9 +96,10 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters):
         cluster_spec = tf.train.ClusterSpec(tf_config['cluster'])
 
         # This assumes we're running n - 1 worker tasks, and that worker_index >= 1.
-        task_index = hosts.index(current_host) + (len(hosts) - 1) * worker_index
-        _logger.info('starting process with worker index {} and task index {}'.format(worker_index, task_index))
+        task_index = (hosts.index(current_host) + (len(hosts) - 1) * worker_index) - 1
+        _logger.info('starting process with worker index {} on node, and task index {}'.format(worker_index, task_index))
         server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
+        trainer.train()
         server.join()
 
     for worker_index in range(workers_per_host):
@@ -185,13 +186,14 @@ def train():
     # only creating a parameter servers for distributed runs
     if len(env.hosts) > 1:
         _run_ps_server(env.current_host, env.hosts, tf_config)
-        _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters)
+        _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters, trainer)
 
     save_tf_config_env_var(tf_config)
 
     configure_mkl()
 
-    trainer.train()
+    if trainer.task_type != 'worker':
+        trainer.train()
 
     # only the master should export the model at the end of the execution
     if checkpoint_dir != env.model_dir and trainer.task_type == 'master' and trainer.saves_training():
