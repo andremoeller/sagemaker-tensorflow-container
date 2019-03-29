@@ -16,7 +16,6 @@ import json
 import os
 import subprocess
 import time
-from threading import Thread
 
 import tensorflow as tf
 
@@ -26,9 +25,23 @@ import tf_container.serve as serve
 
 from tf_container.trainer import Trainer
 from multiprocessing import Process
+from tf_container.timeout import timeout
+
 
 _logger = tf_container.run.get_logger()
 
+
+def _wait_until_master_is_up(master):
+    with timeout(minutes=10):
+        while True:
+            try:
+                # this subprocess call is python 2/3 compatible and will throw an exception when the status code is != 0
+                subprocess.check_call(['curl', '{}:2222'.format(master)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                _logger.info("master node is up.")
+                return
+            except subprocess.CalledProcessError:
+                _logger.info("master node is not up yet")
+                time.sleep(10)
 
 def _wait_until_master_is_down(master):
     while True:
@@ -178,34 +191,14 @@ def train():
 
     configure_mkl()
 
-    #initialize_hook = InitializeHook(env, tf_config)
-    #trainer.train([initialize_hook])
-
     trainer.train()
 
-
-    # MAYBE the master never exits, so nothing else exits?
     # only the master should export the model at the end of the execution
     if checkpoint_dir != env.model_dir and trainer.task_type == 'master' and trainer.saves_training():
         serve.export_saved_model(checkpoint_dir, env.model_dir)
 
     if trainer.task_type != 'master':
+
+        _wait_until_master_is_up(_get_master(tf_config))
+        _logger.info('task_type is {}, waiting for master to exit'.format(trainer.task_type))
         _wait_until_master_is_down(_get_master(tf_config))
-
-
-class InitializeHook(tf.train.SessionRunHook):
-    def __init__(self, env, tf_config):
-        self.env = env
-        self.tf_config = tf_config
-
-    def begin(self):
-        _logger.info('Running initialize hook.')
-        if len(self.env.hosts) > 1:
-            _logger.info('Running parameter servers.')
-            _run_ps_server(self.env.current_host, self.env.hosts, self.tf_config)
-            _logger.info('Possibly running additional workers.')
-            _run_workers(self.env.current_host, self.env.hosts, self.tf_config, self.env.hyperparameters)
-            import time
-            time.sleep(5)
-            import os
-            os.system('ps aux')
