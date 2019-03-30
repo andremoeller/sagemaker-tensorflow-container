@@ -18,6 +18,7 @@ import subprocess
 import time
 
 import tensorflow as tf
+import psutil
 
 import container_support as cs
 import tf_container.run
@@ -43,14 +44,24 @@ def _wait_until_master_is_up(master):
                 _logger.info("master node is not up yet")
                 time.sleep(10)
 
-def _wait_until_master_is_down(master):
+def _wait_until_master_is_down(master, psutil_processes):
     while True:
         try:
             # this subprocess call is python 2/3 compatible and will throw an exception when the status code is != 0
             subprocess.check_call(['curl', '{}:2222'.format(master)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            for p in psutil_processes:
+                with p.oneshot():
+                    _logger.info('process information: {}'.format(p.as_dict(attrs=['name', 'pid', 'cpu_affinity',
+                                                                                   'cpu_num', 'cpu_percent',
+                                                                                   'cpu_times','io_counters',
+                                                                                   'ionice','memory_full_info',
+                                                                                   'memory_percent',
+                                                                                   'nice','num_ctx_switches',
+                                                                                   'num_threads','status', 'threads',
+                                                                                   ''])))
             time.sleep(10)
         except subprocess.CalledProcessError:
-            _logger.info("master {} is down, stopping parameter server".format(master))
+            _logger.info("master {} is down, exiting".format(master))
             return
 
 
@@ -86,10 +97,10 @@ def _run_ps_server(current_host, hosts, tf_config):
     p = Process(target=start_ps_server, args=(current_host, hosts, tf_config))
     _logger.info('Starting parameter server process')
     p.start()
+    return psutil.Process(p)
 
 
-def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
-
+def _run_workers(current_host, hosts, tf_config, hyperparameters):
     workers_per_host = hyperparameters.get('workers_per_host', 1)
 
     def start_worker(current_host, hosts, tf_config, worker_index):
@@ -97,9 +108,8 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
 
         # This assumes we're running n - 1 worker tasks, and that worker_index >= 1.
         task_index = (hosts.index(current_host) + (len(hosts) - 1) * worker_index) - 1
-        _logger.info('starting process with worker index {} on node, and task index {}'.format(worker_index, task_index))
+        _logger.info('starting worker process with index {} on node, and task index {}'.format(worker_index, task_index))
         server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
-        trainer.train()
         server.join()
 
     for worker_index in range(workers_per_host):
@@ -107,8 +117,8 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
             # This worker was already started by TF session
             continue
         p = Process(target=start_worker, args=(current_host, hosts, tf_config, worker_index))
-        _logger.info('Starting worker process with worker index ' + str(worker_index))
         p.start()
+
 
 
 def _get_default_training_params(env):
@@ -170,6 +180,8 @@ def train():
 
     customer_script = env.import_user_module()
 
+    _logger.info('{} physical cores, {} logical cores'.format(psutil.cpu_count(False), psutil.cpu_count(True)))
+    _logger.info('psutil cpu freq: {}'.format(psutil.cpu_freq(percpu=True)))
 
     trainer = Trainer(customer_script=customer_script,
                             current_host=env.current_host,
@@ -182,25 +194,29 @@ def train():
                             customer_params=env.hyperparameters)
 
     tf_config = trainer.build_tf_config()
-
-    # only creating a parameter servers for distributed runs
-    if len(env.hosts) > 1:
-        _run_ps_server(env.current_host, env.hosts, tf_config)
-        _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters, trainer)
-
     save_tf_config_env_var(tf_config)
+
+    processes = [psutil.Process()]
+    if len(env.hosts) > 1:
+        parameter_server_process = _run_ps_server(env.current_host, env.hosts, tf_config)
+        processes.append(parameter_server_process)
+        if env.current_host != 'algo-1':
+            worker_processes = _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters)
+            processes += worker_processes
 
     configure_mkl()
 
-    if trainer.task_type != 'worker':
-        trainer.train()
+    trainer.train()
+
+    _logger.info('psutil cpu stats: {}'.format(psutil.cpu_stats()))
+
+    subprocess.check_output("ps aux", shell=True)
 
     # only the master should export the model at the end of the execution
     if checkpoint_dir != env.model_dir and trainer.task_type == 'master' and trainer.saves_training():
         serve.export_saved_model(checkpoint_dir, env.model_dir)
 
     if trainer.task_type != 'master':
-
         _wait_until_master_is_up(_get_master(tf_config))
         _logger.info('task_type is {}, waiting for master to exit'.format(trainer.task_type))
-        _wait_until_master_is_down(_get_master(tf_config))
+        _wait_until_master_is_down(_get_master(tf_config), processes)

@@ -201,7 +201,8 @@ class Trainer(object):
             'task': {
                 'index': task_id,
                 'type': self.task_type
-            }
+            },
+            'environment': 'cloud'
         }
 
         if ps:

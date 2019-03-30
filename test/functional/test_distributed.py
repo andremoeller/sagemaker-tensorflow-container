@@ -45,16 +45,18 @@ class MyEstimator(TensorFlow):
         return model
 
 
-def test_distributed_fifty_workers(instance_type, sagemaker_session, docker_image_uri):
+def test_distributed_one_worker(instance_type, sagemaker_session, docker_image_uri):
     script_path = 'test/resources/mnist/code'
     data_path = 'test/resources/mnist/data/training'
+    workers_per_host = 1
     with timeout(minutes=30):
         estimator = MyEstimator(entry_point='mnist.py',
                                 source_dir=script_path,
                                 role='SageMakerRole',
                                 training_steps=1000,
                                 evaluation_steps=100,
-                                hyperparameters={'workers_per_host': 50},
+                                base_job_name='test-distributed-{}-workers'.format(workers_per_host),
+                                hyperparameters={'workers_per_host': workers_per_host},
                                 train_instance_count=4,
                                 train_instance_type=instance_type,
                                 sagemaker_session=sagemaker_session,
@@ -72,13 +74,15 @@ def test_distributed_fifty_workers(instance_type, sagemaker_session, docker_imag
 def test_distributed_four_workers(instance_type, sagemaker_session, docker_image_uri):
     script_path = 'test/resources/mnist/code'
     data_path = 'test/resources/mnist/data/training'
+    workers_per_host = 4
     with timeout(minutes=30):
         estimator = MyEstimator(entry_point='mnist.py',
                                 source_dir=script_path,
                                 role='SageMakerRole',
                                 training_steps=1000,
                                 evaluation_steps=100,
-                                hyperparameters={'workers_per_host': 4},
+                                base_job_name='test-distributed-{}-workers'.format(workers_per_host),
+                                hyperparameters={'workers_per_host': workers_per_host},
                                 train_instance_count=4,
                                 train_instance_type=instance_type,
                                 sagemaker_session=sagemaker_session,
@@ -96,13 +100,15 @@ def test_distributed_four_workers(instance_type, sagemaker_session, docker_image
 def test_distributed_two_workers(instance_type, sagemaker_session, docker_image_uri):
     script_path = 'test/resources/mnist/code'
     data_path = 'test/resources/mnist/data/training'
+    workers_per_host = 2
     with timeout(minutes=30):
         estimator = MyEstimator(entry_point='mnist.py',
                                 source_dir=script_path,
                                 role='SageMakerRole',
                                 training_steps=1000,
                                 evaluation_steps=100,
-                                hyperparameters={'workers_per_host': 2},
+                                base_job_name='test-distributed-{}-workers'.format(workers_per_host),
+                                hyperparameters={'workers_per_host': workers_per_host},
                                 train_instance_count=4,
                                 train_instance_type=instance_type,
                                 sagemaker_session=sagemaker_session,

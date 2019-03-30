@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python-dev \
     curl \
     nginx \
+    linux-tools-common
  && rm -rf /var/lib/apt/lists/*
 
 # Python won’t try to write .pyc or .pyo files on the import of source modules
@@ -49,6 +50,7 @@ RUN pip install -U --no-cache-dir \
     pandas \
     Pillow \
     h5py \
+    psutil \
     tensorflow-serving-api==1.11.0 \
     \
     $framework_installable \
