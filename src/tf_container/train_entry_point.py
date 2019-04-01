@@ -97,21 +97,24 @@ def _run_ps_server(current_host, hosts, tf_config):
     psutil_process = psutil.Process(p.pid)
     # One physical CPU for PS.
     # TODO: tune this. Small instances, greater throughput.
-    psutil_process.cpu_affinity([0, 1])
+    #psutil_process.cpu_affinity([0, 1])
     return psutil_process
 
 
-def _run_workers(current_host, hosts, tf_config, hyperparameters):
+def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
     workers_per_host = hyperparameters.get('workers_per_host', 1)
 
     def start_worker(current_host, hosts, tf_config, worker_index):
-        cluster_spec = tf.train.ClusterSpec(tf_config['cluster'])
-
         # This assumes we're running n - 1 worker tasks, and that worker_index >= 1.
         task_index = (hosts.index(current_host) + (len(hosts) - 1) * worker_index) - 1
         _logger.info('starting worker process with index {} on node, and task index {}'.format(worker_index, task_index))
-        server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
-        server.join()
+        tf_config['task'] = {
+                'index': task_index,
+                'type': 'worker'
+        }
+        save_tf_config_env_var(tf_config)
+        trainer.train()
+        _wait_for_master_node(tf_config, trainer)
 
     def _partition(lst, n):
         division = len(lst) / float(n)
@@ -134,8 +137,8 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters):
             p.start()
             psutil_process = psutil.Process(p.pid)
         affinity = partitioned_cpu_list[worker_index]
-        _logger.info('Setting worker index {} to have CPU affinity {}'.format(worker_index, affinity))
-        psutil_process.cpu_affinity(affinity)
+        #_logger.info('Setting worker index {} to have CPU affinity {}'.format(worker_index, affinity))
+        #psutil_process.cpu_affinity(affinity)
         psutil_processes.append(psutil_process)
     return psutil_processes
 
@@ -217,12 +220,12 @@ def train():
     tf_config = trainer.build_tf_config()
     save_tf_config_env_var(tf_config)
 
-    processes = [psutil.Process()]
+    processes = []
     if len(env.hosts) > 1:
         parameter_server_process = _run_ps_server(env.current_host, env.hosts, tf_config)
         processes.append(parameter_server_process)
         if env.current_host != 'algo-1':
-            worker_processes = _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters)
+            worker_processes = _run_workers(env.current_host, env.hosts, tf_config, env.hyperparameters, trainer)
             processes += worker_processes
 
     configure_mkl()
@@ -238,6 +241,9 @@ def train():
         serve.export_saved_model(checkpoint_dir, env.model_dir)
 
     if trainer.task_type != 'master':
-        _wait_until_master_is_up(_get_master(tf_config))
-        _logger.info('task_type is {}, waiting for master to exit'.format(trainer.task_type))
-        _wait_until_master_is_down(_get_master(tf_config), processes)
+        _wait_for_master_node(tf_config, trainer, processes)
+
+def _wait_for_master_node(tf_config, trainer, processes=[]):
+    _wait_until_master_is_up(_get_master(tf_config))
+    _logger.info('task_type is {}, waiting for master to exit'.format(trainer.task_type))
+    _wait_until_master_is_down(_get_master(tf_config), processes)
