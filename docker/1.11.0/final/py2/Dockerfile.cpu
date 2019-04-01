@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python-dev \
     curl \
     nginx \
-    linux-tools-common
- && rm -rf /var/lib/apt/lists/*
+    linux-tools-common \
+    gcc \
+  && rm -rf /var/lib/apt/lists/*
 
 # Python won’t try to write .pyc or .pyo files on the import of source modules
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

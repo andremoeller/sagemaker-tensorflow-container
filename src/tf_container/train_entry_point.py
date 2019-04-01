@@ -31,6 +31,10 @@ from tf_container.timeout import timeout
 
 _logger = tf_container.run.get_logger()
 
+_PROCESS_ATTRIBUTES = ['name', 'pid', 'cpu_affinity', 'cpu_num', 'cpu_percent', 'cpu_times','io_counters',
+                         'ionice','memory_full_info', 'memory_percent', 'nice','num_ctx_switches',
+                         'num_threads','status', 'threads']
+
 
 def _wait_until_master_is_up(master):
     with timeout(minutes=10):
@@ -44,21 +48,14 @@ def _wait_until_master_is_up(master):
                 _logger.info("master node is not up yet")
                 time.sleep(10)
 
+
 def _wait_until_master_is_down(master, psutil_processes):
     while True:
         try:
             # this subprocess call is python 2/3 compatible and will throw an exception when the status code is != 0
             subprocess.check_call(['curl', '{}:2222'.format(master)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             for p in psutil_processes:
-                with p.oneshot():
-                    _logger.info('process information: {}'.format(p.as_dict(attrs=['name', 'pid', 'cpu_affinity',
-                                                                                   'cpu_num', 'cpu_percent',
-                                                                                   'cpu_times','io_counters',
-                                                                                   'ionice','memory_full_info',
-                                                                                   'memory_percent',
-                                                                                   'nice','num_ctx_switches',
-                                                                                   'num_threads','status', 'threads',
-                                                                                   ''])))
+                _logger.info('process information: {}'.format(p.as_dict(attrs=_PROCESS_ATTRIBUTES)))
             time.sleep(10)
         except subprocess.CalledProcessError:
             _logger.info("master {} is down, exiting".format(master))
@@ -94,10 +91,14 @@ def _run_ps_server(current_host, hosts, tf_config):
         server = tf.train.Server(cluster_spec, job_name='ps', task_index=task_index)
         server.join()
 
-    p = Process(target=start_ps_server, args=(current_host, hosts, tf_config))
+    p = Process(name='parameter-server', target=start_ps_server, args=(current_host, hosts, tf_config))
     _logger.info('Starting parameter server process')
     p.start()
-    return psutil.Process(p)
+    psutil_process = psutil.Process(p.pid)
+    # One physical CPU for PS.
+    # TODO: tune this. Small instances, greater throughput.
+    psutil_process.cpu_affinity([0, 1])
+    return psutil_process
 
 
 def _run_workers(current_host, hosts, tf_config, hyperparameters):
@@ -112,12 +113,32 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters):
         server = tf.train.Server(cluster_spec, job_name='worker', task_index=task_index)
         server.join()
 
+    def _partition(lst, n):
+        division = len(lst) / float(n)
+        return [lst[int(round(division * i)): int(round(division * (i + 1)))] for i in range(n)]
+
+    def physical_cpus_to_logical_cpus(l):
+        return sorted([item * 2 for item in l] + [item * 2 + 1 for item in l])
+    # PS has logical CPUs 0, 1 (or physical CPU 1).
+    # Count physical CPUs rather than logical CPUs to ensure that physical CPUs aren't split between processes.
+    cpu_list = list(range(psutil.cpu_count(False)))[1:]
+    psutil_processes = []
+    partitioned_cpu_list = [physical_cpus_to_logical_cpus(part) for part in _partition(cpu_list, workers_per_host)]
     for worker_index in range(workers_per_host):
         if worker_index == 0:
             # This worker was already started by TF session
-            continue
-        p = Process(target=start_worker, args=(current_host, hosts, tf_config, worker_index))
-        p.start()
+            psutil_process = psutil.Process()
+        else:
+            p = Process(name='worker-{}'.format(worker_index), target=start_worker,
+                        args=(current_host, hosts, tf_config, worker_index))
+            p.start()
+            psutil_process = psutil.Process(p.pid)
+        affinity = partitioned_cpu_list[worker_index]
+        _logger.info('Setting worker index {} to have CPU affinity {}'.format(worker_index, affinity))
+        psutil_process.cpu_affinity(affinity)
+        psutil_processes.append(psutil_process)
+    return psutil_processes
+
 
 
 
