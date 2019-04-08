@@ -49,13 +49,11 @@ def _wait_until_master_is_up(master):
                 time.sleep(10)
 
 
-def _wait_until_master_is_down(master, psutil_processes):
+def _wait_until_master_is_down(master):
     while True:
         try:
             # this subprocess call is python 2/3 compatible and will throw an exception when the status code is != 0
             subprocess.check_call(['curl', '{}:2222'.format(master)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            for p in psutil_processes:
-                _logger.info('process information: {}'.format(p.as_dict(attrs=_PROCESS_ATTRIBUTES)))
             time.sleep(10)
         except subprocess.CalledProcessError:
             _logger.info("master {} is down, exiting".format(master))
@@ -113,17 +111,7 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
         trainer.train()
         _wait_for_master_node(tf_config, trainer)
 
-    def _partition(lst, n):
-        division = len(lst) / float(n)
-        return [lst[int(round(division * i)): int(round(division * (i + 1)))] for i in range(n)]
-
-    def physical_cpus_to_logical_cpus(l):
-        return sorted([item * 2 for item in l] + [item * 2 + 1 for item in l])
-    # PS has logical CPUs 0, 1 (or physical CPU 1).
-    # Count physical CPUs rather than logical CPUs to ensure that physical CPUs aren't split between processes.
-    cpu_list = list(range(psutil.cpu_count(False)))[1:]
     psutil_processes = []
-    partitioned_cpu_list = [physical_cpus_to_logical_cpus(part) for part in _partition(cpu_list, workers_per_host)]
     for worker_index in range(workers_per_host):
         if worker_index == 0:
             # This worker was already started by TF session
@@ -198,9 +186,6 @@ def train():
 
     customer_script = env.import_user_module()
 
-    _logger.info('{} physical cores, {} logical cores'.format(psutil.cpu_count(False), psutil.cpu_count(True)))
-    _logger.info('psutil cpu freq: {}'.format(psutil.cpu_freq(percpu=True)))
-
     trainer = Trainer(customer_script=customer_script,
                             current_host=env.current_host,
                             hosts=env.hosts,
@@ -226,18 +211,14 @@ def train():
 
     trainer.train()
 
-    _logger.info('psutil cpu stats: {}'.format(psutil.cpu_stats()))
-
-    subprocess.check_output("ps aux", shell=True)
-
     # only the master should export the model at the end of the execution
     if checkpoint_dir != env.model_dir and trainer.task_type == 'master' and trainer.saves_training():
         serve.export_saved_model(checkpoint_dir, env.model_dir)
 
     if trainer.task_type != 'master':
-        _wait_for_master_node(tf_config, trainer, processes)
+        _wait_for_master_node(tf_config, trainer)
 
-def _wait_for_master_node(tf_config, trainer, processes=[]):
+def _wait_for_master_node(tf_config, trainer):
     _wait_until_master_is_up(_get_master(tf_config))
     _logger.info('task_type is {}, waiting for master to exit'.format(trainer.task_type))
-    _wait_until_master_is_down(_get_master(tf_config), processes)
+    _wait_until_master_is_down(_get_master(tf_config))
