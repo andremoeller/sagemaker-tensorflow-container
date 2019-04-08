@@ -95,9 +95,6 @@ def _run_ps_server(current_host, hosts, tf_config):
     _logger.info('Starting parameter server process')
     p.start()
     psutil_process = psutil.Process(p.pid)
-    # One physical CPU for PS.
-    # TODO: tune this. Small instances, greater throughput.
-    #psutil_process.cpu_affinity([0, 1])
     return psutil_process
 
 
@@ -136,9 +133,6 @@ def _run_workers(current_host, hosts, tf_config, hyperparameters, trainer):
                         args=(current_host, hosts, tf_config, worker_index))
             p.start()
             psutil_process = psutil.Process(p.pid)
-        affinity = partitioned_cpu_list[worker_index]
-        #_logger.info('Setting worker index {} to have CPU affinity {}'.format(worker_index, affinity))
-        #psutil_process.cpu_affinity(affinity)
         psutil_processes.append(psutil_process)
     return psutil_processes
 
